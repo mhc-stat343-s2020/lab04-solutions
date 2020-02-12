@@ -1,0 +1,104 @@
+---
+title: "Stat 343: Optimization in Stan"
+output:
+  pdf_document
+---
+
+\newcommand{\simiid}{{\mathrel {\mathop {\sim}\limits _{}^{\rm iid}}\,}}
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(readr)
+library(dplyr)
+library(ggplot2)
+```
+
+# Mites
+
+This example is adapted from Example A in Chapter 8.7 of Rice.  Here's a quote from the book:
+
+> "Let us consider an example from Bliss and Fisher (1953).  From each of 6 apple trees in an orchard that was sprayed, 25 leaves were selected.  On each of the leaves, the number of adult female red mites was counted.  Intuitively, we might conclude that this situaton as too heterogeneous for a Poisson model to fit; the rates of infestation might be different on different trees and at different locations on the same tree."
+
+The code below reads in the data, creates a histogram of the data with the pmf from a Poisson model overlaid on top, and calculates the mean and sample variance of the data.  If $X \sim \text{Poisson}(\lambda)$ then $E(X) = Var(X) = \lambda$.  In this case, the variance is about twice the mean and the fit does not look good in the plot; these are signs that the Poisson model is not a good fit for these data.
+
+```{r}
+mites <- read_csv("http://www.evanlray.com/data/rice/Chapter%208/mites.csv")
+head(mites)
+
+mean(mites$num_mites_per_leaf)
+var(mites$num_mites_per_leaf)
+
+x <- seq(from = 0, to = max(mites$num_mites_per_leaf), by = 1)
+
+poisson_fit <- data.frame(
+  x = x,
+  fit = dpois(x, lambda = mean(mites$num_mites_per_leaf))
+)
+
+ggplot() +
+  geom_histogram(data = mites, mapping = aes(x = num_mites_per_leaf, y = ..density..), binwidth = 1, center = 0) +
+  geom_line(data = poisson_fit, mapping = aes(x = x, y = fit), color = "orange") +
+  geom_point(data = poisson_fit, mapping = aes(x = x, y = fit), color = "orange")
+```
+
+A common alternative to the Poisson for count data when the variance is larger than the mean is the Negative Binomial distribution.  We'll explore using this model
+
+$X_i \simiid \text{Negative Binomial}(\mu, \phi)$,
+
+where $X_i$ is the observed number of mites on leaf number $i$.
+
+#### 1. Set up model definition in stan
+
+I have set up a skeleton of the stan file, included in this repository.  Edit that file now to add necessary declarations and model statements for this model to the data, parameters, and model blocks.
+
+#### 2. Perform estimation
+
+You will need to load the rstan package, set up a list with the data for the stan model, compile the model, and call `optimizing` to obtain the maximum likelihood estimates of the model parameters.
+
+```{r, results = "hide"}
+# Load the rstan package
+library(rstan)
+
+# Set up list with data Stan will need to know about
+stan_data <- list(
+  n = nrow(mites),
+  x = mites$num_mites_per_leaf
+)
+
+# Compile the Stan model definition to an executable.  Takes a few seconds to run.
+mites_model_compiled <- stan_model(file = "mites_model.stan")
+
+# Call Stan to do optimization
+mites_fit <- optimizing(mites_model_compiled,
+  data = stan_data,
+  seed = 8742,
+  init = "random"
+)
+```
+
+```{r}
+mites_fit
+```
+
+#### 3. Make a plot
+
+Add a new layer to the plot below showing the pdf of the negative binomial distribution corresponding to the maximum likelihood parameter estimates.
+
+```{r}
+x <- seq(from = 0, to = max(mites$num_mites_per_leaf), by = 1)
+
+# Modify the code below to calculate values of the pmf from a
+# negative binomial distribution with the parameter estimates from Stan.
+# The function to use is dbinom(x, mu = mu, size = phi),
+# but you need to extract the estimates of mu and phi from your mites_fit object.
+neg_binomial_fit <- data.frame(
+  x = x,
+  fit = dnbinom(x, mu = mites_fit$par["mu"], size = mites_fit$par["phi"])
+)
+
+ggplot() +
+  geom_histogram(data = mites, mapping = aes(x = num_mites_per_leaf, y = ..density..), binwidth = 1, center = 0) +
+  geom_line(data = neg_binomial_fit, mapping = aes(x = x, y = fit), color = "orange") +
+  theme_bw()
+```
